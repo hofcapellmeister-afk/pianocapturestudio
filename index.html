@@ -28,7 +28,7 @@
     <div class="timer-label" id="timerLabel">Aufnahmedauer</div>
     <div class="wavebox"><canvas id="wave" aria-label="Live-Wellenform"></canvas></div>
     <div class="meters"><div><div class="meter-label"><span>LINKS / MONO</span><span id="levelL">−∞ dBFS</span></div><div class="track"><div class="fill" id="barL"></div></div></div><div id="rightMeter" class="meter-off"><div class="meter-label"><span>RECHTS</span><span id="levelR">−∞ dBFS</span></div><div class="track"><div class="fill" id="barR"></div></div></div></div>
-    <div class="ctl"><button id="start" class="primary">● Aufnahme starten</button><button id="stop" class="stop" disabled>■ Stopp</button><button id="export" class="export" disabled>↓ WAV sichern</button></div>
+    <div class="ctl"><button id="start" class="primary">● Aufnahme starten</button><button id="stop" class="stop" disabled>■ Stopp</button><button id="listen" disabled>▶ Anhören</button><button id="export" class="export" disabled>↓ WAV sichern</button></div><audio id="player" controls preload="none" playsinline style="display:none;width:100%;margin-top:16px" aria-label="Aufnahme abspielen"></audio>
     <p class="footnote">Automatischer Exportpegel · unveränderte Spieldynamik · kein Hall · keine Kompression</p>
   </section>
   <section class="settings">
@@ -37,13 +37,13 @@
   </section>
   <p class="message" id="message" role="status" aria-live="polite">Aufnahme funktioniert nur auf einer freigegebenen, sicheren Safari-Website (HTTPS). Die heruntergeladene HTML-Datei in „Dateien“ kann keinen zuverlässigen Mikrofonzugriff erhalten. Das Display eingeschaltet lassen.</p>
   <div class="output" id="output"><strong id="fileTitle">WAV-Datei bereit</strong><p id="fileDetail"></p><p id="fileHint">Falls sich die Datei öffnet statt herunterzuladen: Teilen → „In Dateien sichern“.</p><a id="fileLink" download="Piano-Capture.wav">WAV erneut herunterladen</a></div>
-  <p class="footer">Piano Capture Studio 0.3 · Steinway B-211 · rein lokale Verarbeitung. Ein optimaler Exportpegel kann eine bereits übersteuerte Mikrofonaufnahme nicht retten. Abtastrate und Mikrofonkanäle legt iPadOS fest.</p>
+  <p class="footer">Piano Capture Studio 0.4 · Steinway B-211 · rein lokale Verarbeitung. Ein optimaler Exportpegel kann eine bereits übersteuerte Mikrofonaufnahme nicht retten. Abtastrate und Mikrofonkanäle legt iPadOS fest.</p>
 </main>
 <script>
 'use strict';
 (() => {
   const $ = s => document.getElementById(s);
-  const startBtn=$('start'), stopBtn=$('stop'), exportBtn=$('export'), msg=$('message');
+  const startBtn=$('start'), stopBtn=$('stop'), exportBtn=$('export'), listenBtn=$('listen'), player=$('player'), msg=$('message');
   const status=$('status'), statusText=$('statusText'), timer=$('timer'), nameField=$('takeName'), fmt=$('format');
   const canvas=$('wave'), graph=canvas.getContext('2d');
   const MAX_SECONDS=600;
@@ -68,7 +68,7 @@
   function announce(text,kind=''){msg.textContent=text;msg.className='message'+(kind?' '+kind:'')}
   function prettyDb(p){return p>0.000001 ? (20*Math.log10(p)).toFixed(1)+' dBFS':'−∞ dBFS'}
   function meter(p,side){$(side==='L'?'barL':'barR').style.width=Math.max(0,Math.min(100,100+20*Math.log10(Math.max(p,1e-5))/60*100))+'%';$(side==='L'?'levelL':'levelR').textContent=prettyDb(p)}
-  function updateButtons(){startBtn.disabled=state!=='idle';stopBtn.disabled=state!=='recording';exportBtn.disabled=state!=='idle'||!frames;nameField.disabled=state!=='idle';fmt.disabled=state!=='idle'}
+  function updateButtons(){startBtn.disabled=state!=='idle';stopBtn.disabled=state!=='recording';listenBtn.disabled=state!=='idle'||!lastWav;exportBtn.disabled=state!=='idle'||(!frames&&!lastWav);nameField.disabled=state!=='idle';fmt.disabled=state!=='idle'}
   function formatTime(sec){let m=Math.floor(sec/60),s=Math.floor(sec%60);return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
   function pushPCM(data,n,c){if(state!=='recording' && state!=='stopping')return;
     if(channels===0){channels=c;$('channels').textContent=c===2?'2 (Stereo)':'1 (Mono)';$('rightMeter').classList.toggle('meter-off',c===1)}
@@ -103,7 +103,7 @@
       return;
     }
     state='starting';updateButtons();updateStatus('Mikrofon freigeben …');
-    if(lastObjectUrl){URL.revokeObjectURL(lastObjectUrl);lastObjectUrl=null}lastWav=null;
+    player.pause();player.removeAttribute('src');player.load();player.style.display='none';listenBtn.textContent='▶ Anhören';if(lastObjectUrl){URL.revokeObjectURL(lastObjectUrl);lastObjectUrl=null}lastWav=null;
     chunks=[];frames=0;channels=0;elapsed=0;peakHistory.fill(0);meterPeak=[0,0];warnedClip=false;rawPeak=0;nearRailSamples=0;clipped=false;timer.textContent='00:00';meter(0,'L');meter(0,'R');$('channels').textContent='—';$('output').classList.remove('show');$('clipInfo').textContent='Automatik aktiv: konstanter WAV-Pegel nach Analyse des Takes, ohne Kompression. Eingang ist durch iPadOS geregelt.';$('clipInfo').style.color='';
     try{
       const AudioContextCtor=window.AudioContext||window.webkitAudioContext;
@@ -172,11 +172,11 @@
     timer.textContent=formatTime(frames/sampleRate);
     if(clipped){$('clipInfo').textContent='⚠ Warnung: Spitzen am Eingang bei 0 dBFS. Digitale Pegelabsenkung kann diese mögliche Verzerrung nicht beseitigen.';$('clipInfo').style.color='#f8afa2';}
     else{$('clipInfo').textContent='Eingangs-Peak: '+prettyDb(rawPeak)+'. Keine Spitzen nahe 0 dBFS erkannt. WAV wird beim Sichern automatisch auf max. −6 dBFS ausgepegelt.';$('clipInfo').style.color='';}
-    announce('Take beendet · '+formatTime(frames/sampleRate)+'. '+(clipped?'ACHTUNG: Eingang nahe 0 dBFS. ':'')+'„WAV sichern“ startet die automatische Pegelanpassung.',clipped?'error':'success');
+    await encode({download:false});
   }
   async function cleanup(){clearTimeout(audioWatchdog);audioWatchdog=null;clearInterval(interval);try{source?.disconnect()}catch(_){}try{worklet?.disconnect()}catch(_){}try{legacy?.disconnect()}catch(_){}try{silence?.disconnect()}catch(_){}try{stream?.getTracks().forEach(t=>t.stop())}catch(_){}try{await ctx?.close()}catch(_){}await releaseWakeLock();stream=null;ctx=null;source=null;worklet=null;silence=null;legacy=null;}
   function wavHeader(nFrames,channels,rate,bitDepth){const bps=bitDepth/8,length=nFrames*channels*bps;const ab=new ArrayBuffer(44),d=new DataView(ab);const str=(pos,t)=>{for(let i=0;i<t.length;i++)d.setUint8(pos+i,t.charCodeAt(i))};str(0,'RIFF');d.setUint32(4,36+length,true);str(8,'WAVE');str(12,'fmt ');d.setUint32(16,16,true);d.setUint16(20,1,true);d.setUint16(22,channels,true);d.setUint32(24,rate,true);d.setUint32(28,rate*channels*bps,true);d.setUint16(32,channels*bps,true);d.setUint16(34,bitDepth,true);str(36,'data');d.setUint32(40,length,true);return ab}
-  async function encode(){if(state!=='idle'||!frames)return;state='exporting';updateButtons();updateStatus('WAV erstellen …');announce('WAV: konstante automatische Pegelanpassung für den gesamten Steinway-B-211-Take …');const bits=Number(fmt.value);const bytes=bits/8;
+  async function encode({download=false}={}){if(state!=='idle')return;if(lastWav){if(download)$('fileLink').click();return;}if(!frames)return;state='exporting';updateButtons();updateStatus('WAV erstellen …');announce('WAV: konstante automatische Pegelanpassung für den gesamten Steinway-B-211-Take …');const bits=Number(fmt.value);const bytes=bits/8;
     // Fixed take-wide gain. Unlike AGC/limiting, this preserves dynamics and channel balance.
     // The browser cannot undo ADC/microphone clipping that is already in the source.
     const gain=rawPeak>1e-7?Math.min(MAX_BOOST,TARGET_PEAK/rawPeak):1;
@@ -186,11 +186,13 @@
       for(const block of chunks){const raw=new Uint8Array(block.n*channels*bytes);let p=0;for(let i=0;i<block.n;i++){for(let k=0;k<channels;k++){const x=Math.max(-1,Math.min(1,block.arr[k][i]*gain));if(bits===16){const v=Math.round(x<0?x*32768:x*32767);raw[p++]=v&255;raw[p++]=(v>>8)&255}else{const v=Math.round(x<0?x*8388608:x*8388607);raw[p++]=v&255;raw[p++]=(v>>8)&255;raw[p++]=(v>>16)&255}}}parts.push(raw);if(++count%100===0)await new Promise(requestAnimationFrame)}
       const wav=new Blob(parts,{type:'audio/wav'});lastWav=wav;lastObjectUrl=URL.createObjectURL(wav);lastName=(nameField.value.trim()||'Piano-Improvisation').replace(/[\\/:*?"<>|]/g,'_')+'.wav';
       $('fileLink').href=lastObjectUrl;$('fileLink').download=lastName;$('fileTitle').textContent=lastName;$('fileDetail').textContent=(wav.size/1048576).toFixed(1)+' MB · WAV PCM '+bits+' Bit · '+channels+' Kanal/Kanäle · '+(sampleRate/1000).toFixed(1)+' kHz · Auto-Pegel '+(gainDb>=0?'+':'')+gainDb.toFixed(1)+' dB · Spitzen '+prettyDb(rawPeak*gain)+(clipped?' · ACHTUNG: Eingang am Limit!':'');$('output').classList.add('show');
-      chunks=[];state='idle';updateButtons();updateStatus('WAV bereit');announce(clipped?'WAV gespeichert, aber mögliche Verzerrung im Mikrofonsignal festgestellt. Bitte vor weiteren wichtigen Aufnahmen die Aufstellung ändern.':'WAV automatisch ausgepegelt – ohne Kompression und mit unveränderter Spieldynamik. Über „WAV erneut herunterladen“ sichern. ',clipped?'error':'success');
-      const a=$('fileLink');a.click();
+      chunks=[];player.src=lastObjectUrl;player.style.display='block';state='idle';updateButtons();updateStatus('WAV bereit');announce(clipped?'Aufnahme bereit, aber Warnung: Eingangsspitzen nahe 0 dBFS – mögliche Verzerrungen sind nicht reparierbar.':'Aufnahme bereit. Tippe auf „▶ Anhören“ zum Abspielen oder auf „WAV sichern“ zum Speichern auf deinem iPad.',clipped?'error':'success');
+      if(download)$('fileLink').click();
     }catch(err){state='idle';updateButtons();updateStatus('Fehler');announce('WAV konnte nicht erstellt werden: '+(err?.message||err),'error')}
   }
-  startBtn.addEventListener('click',()=>void begin());stopBtn.addEventListener('click',()=>void stopRecording());exportBtn.addEventListener('click',()=>void encode());
+  startBtn.addEventListener('click',()=>void begin());stopBtn.addEventListener('click',()=>void stopRecording());exportBtn.addEventListener('click',()=>void encode({download:true}));
+  listenBtn.addEventListener('click',()=>{if(!lastWav)return;if(player.paused){player.play().then(()=>{listenBtn.textContent='Ⅱ Pause'}).catch(err=>announce('Wiedergabe nicht möglich: '+(err?.message||err),'error'))}else{player.pause();listenBtn.textContent='▶ Anhören'}});
+  player.addEventListener('pause',()=>{listenBtn.textContent='▶ Anhören'});player.addEventListener('ended',()=>{listenBtn.textContent='▶ Anhören'});player.addEventListener('play',()=>{listenBtn.textContent='Ⅱ Pause'});
   window.addEventListener('resize',()=>{prepareCanvas();draw()});
   document.addEventListener('visibilitychange',()=>{if(document.hidden && state==='recording'){announce('WARNUNG: Im Hintergrund kann Safari die Mikrofonaufnahme unterbrechen. Zur App zurückkehren und die Aufnahme prüfen.','error')}});
   window.addEventListener('beforeunload',e=>{if(state==='recording'||state==='stopping'||(chunks.length&&!lastWav)){e.preventDefault();e.returnValue='';}});
